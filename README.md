@@ -26,12 +26,12 @@ Instalación:
 1. Clonar el repositorio:
 
 ```bash
-  git clone [url-del-repositorio]
+  git clone https://github.com/JEsteban1999/compras-backend.git
 ```
 
 2. Navegar al directorio del proyecto:
 ```bash
-  cd [nombre-del-proyecto]
+  cd compras-backend
 ```
 
 3. Compilar el proyecto:
