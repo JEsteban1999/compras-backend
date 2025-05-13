@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.gestor.compras.dto.DetalleOrdenDTO;
 import com.gestor.compras.dto.OrdenCompraDTO;
+import com.gestor.compras.exception.BusinessException;
 import com.gestor.compras.exception.ResourceNotFoundException;
 import com.gestor.compras.model.DetalleOrden;
 import com.gestor.compras.model.OrdenCompra;
@@ -33,6 +34,9 @@ public class OrdenCompraServiceImpl implements OrdenCompraService {
     @Override
     @Transactional
     public OrdenCompraDTO crearOrden(OrdenCompraDTO ordenCompraDTO) {
+        // Validar stock antes de procesar la orden
+        validarStockDisponible(ordenCompraDTO.getDetalles());
+
         BigDecimal totalCalculado = calcularTotal(ordenCompraDTO.getDetalles());
         OrdenCompra orden = new OrdenCompra();
         orden.setNumeroOrden(generarNumeroOrden());
@@ -43,6 +47,11 @@ public class OrdenCompraServiceImpl implements OrdenCompraService {
         ordenCompraDTO.getDetalles().forEach(detalleDTO -> {
             Producto producto = productoRepository.findById(detalleDTO.getProductoId())
                     .orElseThrow(() -> new ResourceNotFoundException("Producto no encontrado"));
+            // Actualizar stock del producto
+
+            int nuevoStock = producto.getStock() - detalleDTO.getCantidad();
+            producto.setStock(nuevoStock);
+            productoRepository.save(producto);
 
             DetalleOrden detalle = new DetalleOrden();
             detalle.setOrden(ordenGuardada);
@@ -79,6 +88,13 @@ public class OrdenCompraServiceImpl implements OrdenCompraService {
     public void eliminarOrden(Long id) {
         OrdenCompra orden = ordenCompraRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Orden no encontrada"));
+
+        // Restaurar el stock de los productos
+        orden.getDetalles().forEach(detalle -> {
+            Producto producto = detalle.getProducto();
+            producto.setStock(producto.getStock() + detalle.getCantidad());
+            productoRepository.save(producto);
+        });
         ordenCompraRepository.delete(orden);
     }
 
@@ -88,16 +104,30 @@ public class OrdenCompraServiceImpl implements OrdenCompraService {
         OrdenCompra ordenExistente = ordenCompraRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Orden no encontrada"));
 
-        // Actualiza los campos necesarios
-        ordenExistente.setTotal(ordenCompraDTO.getTotal());
+        // Primero restaurar el stock de los detalles antiguos
+        ordenExistente.getDetalles().forEach(detalle -> {
+            Producto producto = detalle.getProducto();
+            producto.setStock(producto.getStock() + detalle.getCantidad());
+            productoRepository.save(producto);
+        });
 
-        // Elimina los detalles existentes
+        // Validar nuevo stock disponible
+        validarStockDisponible(ordenCompraDTO.getDetalles());
+
+        // Actualizar el total
+        ordenExistente.setTotal(calcularTotal(ordenCompraDTO.getDetalles()));
+
+        // Eliminar los detalles existentes
         detalleOrdenRepository.deleteByOrdenId(id);
 
-        // Crea nuevos detalles
+        // Crear nuevos detalles y actualizar stock
         ordenCompraDTO.getDetalles().forEach(detalleDTO -> {
             Producto producto = productoRepository.findById(detalleDTO.getProductoId())
                     .orElseThrow(() -> new ResourceNotFoundException("Producto no encontrado"));
+
+            // Actualizar stock
+            producto.setStock(producto.getStock() - detalleDTO.getCantidad());
+            productoRepository.save(producto);
 
             DetalleOrden detalle = new DetalleOrden();
             detalle.setOrden(ordenExistente);
@@ -124,6 +154,20 @@ public class OrdenCompraServiceImpl implements OrdenCompraService {
         return detalles.stream()
                 .map(d -> d.getPrecioUnitario().multiply(BigDecimal.valueOf(d.getCantidad())))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    // Método para validar el stock disponible
+    private void validarStockDisponible(List<DetalleOrdenDTO> detalles) {
+        detalles.forEach(detalleDTO -> {
+            Producto producto = productoRepository.findById(detalleDTO.getProductoId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Producto no encontrado"));
+
+            if (producto.getStock() < detalleDTO.getCantidad()) {
+                throw new BusinessException("Stock insuficiente para el producto: " + producto.getNombre() +
+                        ". Stock disponible: " + producto.getStock() +
+                        ", cantidad solicitada: " + detalleDTO.getCantidad());
+            }
+        });
     }
 
     private String generarNumeroOrden() {
